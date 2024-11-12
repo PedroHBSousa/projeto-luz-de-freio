@@ -18,15 +18,15 @@ def play_alert_sound():
         playsound(alert_sound_path)
         time.sleep(0.5)  # Pequeno intervalo para evitar sobreposição excessiva
 
-# Função para detectar cor vermelha
+# Função para detectar cor vermelha aprimorada
 def detect_red_light(frame):
     # Converter a imagem para o espaço de cor HSV
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # Definir limites para a cor vermelha
-    lower_red1 = np.array([0, 100, 100])
+    # Definir limites mais precisos para a cor vermelha (freio de carro)
+    lower_red1 = np.array([0, 120, 150])  # Vermelho escuro
     upper_red1 = np.array([10, 255, 255])
-    lower_red2 = np.array([160, 100, 100])
+    lower_red2 = np.array([170, 120, 150])  # Vermelho escuro
     upper_red2 = np.array([180, 255, 255])
 
     # Filtrar a cor vermelha
@@ -44,16 +44,45 @@ def detect_red_light(frame):
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 500:  # Filtrar contornos pequenos
+        if area > 1000:  # Ajuste da área mínima para evitar falsos positivos
             x, y, w, h = cv2.boundingRect(cnt)
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             return True  # Luz vermelha detectada
 
     return False
 
+# Função para listar dispositivos de câmera com limite de tentativas
+def list_cameras(max_cameras=5):
+    available_cameras = []
+    for index in range(max_cameras):
+        cap = cv2.VideoCapture(index)
+        if cap.isOpened():
+            ret, _ = cap.read()
+            if ret:
+                available_cameras.append(index)
+            cap.release()
+    return available_cameras
+
 def main():
     global alert_playing
-    cap = cv2.VideoCapture(0)
+
+    # Listar câmeras disponíveis (limitar a 5 tentativas)
+    cameras = list_cameras()
+    if not cameras:
+        print("Nenhuma câmera encontrada.")
+        return
+
+    # Mostrar opções de câmeras para o usuário
+    print("Câmeras disponíveis:")
+    for i, cam in enumerate(cameras):
+        print(f"{i}: Câmera {cam}")
+
+    # Selecionar câmera
+    camera_choice = int(input("Escolha o número da câmera que deseja usar: "))
+    camera_index = cameras[camera_choice]
+
+    # Abrir a câmera escolhida
+    cap = cv2.VideoCapture(camera_index)
 
     while cap.isOpened():
         ret, frame = cap.read()
