@@ -11,47 +11,78 @@ alert_sound_path = os.path.join("sounds", "alert.mp3")
 # Variável para controle do som de alerta
 alert_playing = False
 
+# Buffer para estabilidade de detecção
+detection_buffer = 0
+buffer_threshold = 5
+
 # Função para emitir som de alerta em loop
 def play_alert_sound():
     global alert_playing
-    while alert_playing:  # Loop enquanto alert_playing for True
+    while alert_playing:
         playsound(alert_sound_path)
-        time.sleep(0.5)  # Pequeno intervalo para evitar sobreposição excessiva
+        time.sleep(0.5)
 
-# Função para detectar cor vermelha aprimorada
+# Função aprimorada para detectar luzes de freio
 def detect_red_light(frame):
+    global detection_buffer
+
     # Converter a imagem para o espaço de cor HSV
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # Definir limites mais precisos para a cor vermelha (freio de carro)
-    lower_red1 = np.array([0, 120, 150])  # Vermelho escuro
+    # Ajuste dos limites para detectar uma gama maior de vermelho
+    lower_red1 = np.array([0, 100, 100])
     upper_red1 = np.array([10, 255, 255])
-    lower_red2 = np.array([170, 120, 150])  # Vermelho escuro
+    lower_red2 = np.array([160, 100, 100])
     upper_red2 = np.array([180, 255, 255])
 
-    # Filtrar a cor vermelha
+    # Criar máscara para vermelho
     mask1 = cv2.inRange(hsv_frame, lower_red1, upper_red1)
     mask2 = cv2.inRange(hsv_frame, lower_red2, upper_red2)
     red_mask = cv2.add(mask1, mask2)
 
-    # Processamento para detecção de área vermelha
-    red_output = cv2.bitwise_and(frame, frame, mask=red_mask)
-    gray = cv2.cvtColor(red_output, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY)
+    # Aumentar área de interesse (ROI)
+    height, width = frame.shape[:2]
+    roi = red_mask[height // 3:, :]  # Aumentar para os 2/3 inferiores da imagem
 
-    # Encontrar contornos
-    contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # Calcular a média do brilho (V) da região de interesse
+    roi_hsv = hsv_frame[height // 3:, :]  # Extrair a ROI do frame HSV
+    brightness_avg = np.mean(roi_hsv[:, :, 2])  # Média do canal de brilho (V)
+
+    # Ajustar limiar de brilho baseado no brilho médio da ROI
+    dynamic_threshold = brightness_avg + 50  # Exemplo: valor fixo acima da média (ajustar conforme necessário)
+    brightness_mask = roi_hsv[:, :, 2] > dynamic_threshold  # Máscara de brilho ajustada dinamicamente
+
+    # Combine a máscara de cor vermelha com a de brilho
+    combined_mask = cv2.bitwise_and(roi, roi, mask=brightness_mask.astype(np.uint8))
+
+    # Encontrar contornos na máscara combinada
+    contours, _ = cv2.findContours(combined_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Variável para indicar se luz vermelha foi detectada
+    light_detected = False
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 1000:  # Ajuste da área mínima para evitar falsos positivos
+        if area > 500:  # Ajuste do tamanho mínimo do contorno
             x, y, w, h = cv2.boundingRect(cnt)
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            return True  # Luz vermelha detectada
+            aspect_ratio = w / float(h)
 
-    return False
+            # Verificar se o contorno é semelhante ao de uma luz de freio
+            if 0.4 < aspect_ratio < 2.5:
+                cv2.rectangle(frame, (x, y + height // 3), (x + w, y + h + height // 3), (0, 255, 0), 2)
+                light_detected = True
 
-# Função para listar dispositivos de câmera com limite de tentativas
+    # Controle de buffer para estabilidade
+    if light_detected:
+        detection_buffer += 1
+    else:
+        detection_buffer = max(0, detection_buffer - 1)
+
+    # Confirmar detecção se buffer estiver acima do limiar
+    return detection_buffer > buffer_threshold
+
+
+# Função para listar dispositivos de câmera
 def list_cameras(max_cameras=5):
     available_cameras = []
     for index in range(max_cameras):
@@ -66,22 +97,18 @@ def list_cameras(max_cameras=5):
 def main():
     global alert_playing
 
-    # Listar câmeras disponíveis (limitar a 5 tentativas)
     cameras = list_cameras()
     if not cameras:
         print("Nenhuma câmera encontrada.")
         return
 
-    # Mostrar opções de câmeras para o usuário
     print("Câmeras disponíveis:")
     for i, cam in enumerate(cameras):
         print(f"{i}: Câmera {cam}")
 
-    # Selecionar câmera
     camera_choice = int(input("Escolha o número da câmera que deseja usar: "))
     camera_index = cameras[camera_choice]
 
-    # Abrir a câmera escolhida
     cap = cv2.VideoCapture(camera_index)
 
     while cap.isOpened():
@@ -92,23 +119,23 @@ def main():
         # Detectar luz vermelha
         red_light_detected = detect_red_light(frame)
 
-        # Emitir som de alerta se luz vermelha detectada
+        # Gerenciar som de alerta
         if red_light_detected and not alert_playing:
             alert_playing = True
             threading.Thread(target=play_alert_sound, daemon=True).start()
         elif not red_light_detected and alert_playing:
             alert_playing = False
 
-        # Exibir a imagem capturada
+        # Exibir imagem
         cv2.imshow("Red Light Detector", frame)
 
-        # Encerrar com a tecla 'q'
+        # Tecla 'q' para sair
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
     cv2.destroyAllWindows()
-    alert_playing = False  # Parar o som quando o programa for encerrado
+    alert_playing = False
 
 if __name__ == "__main__":
     main()
